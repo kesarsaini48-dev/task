@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My AI Assistant</title>
+<style>
+:root{--bg:#faf9f5;--panel:#f0eee6;--text:#1f1e1d;--muted:#6b6a65;--accent:#c96442;--user:#e9e6dc;--border:#ddd9cc}
+@media (prefers-color-scheme:dark){:root{--bg:#262624;--panel:#1f1e1d;--text:#eceae2;--muted:#9a978c;--user:#3a3936;--border:#3d3c38}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;display:flex}
+aside{width:260px;background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:12px}
+aside h1{font-size:18px;margin:4px 8px 12px}
+button{font:inherit;cursor:pointer}
+#newChat{background:var(--accent);color:#fff;border:0;border-radius:10px;padding:10px;margin-bottom:10px}
+#history{flex:1;overflow:auto}
+.hist{padding:8px 10px;border-radius:8px;font-size:14px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hist:hover,.hist.active{background:var(--user)}
+main{flex:1;display:flex;flex-direction:column;min-width:0}
+header{display:flex;gap:8px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border)}
+header select,header button{background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 10px}
+#menu{display:none}
+#chat{flex:1;overflow:auto;padding:20px 0}
+.row{max-width:760px;margin:0 auto;padding:8px 16px;display:flex}
+.row.user{justify-content:flex-end}
+.bubble{padding:10px 14px;border-radius:14px;line-height:1.55;white-space:pre-wrap;word-wrap:break-word;max-width:100%}
+.user .bubble{background:var(--user)}
+.bot .bubble{padding-left:0}
+.bubble pre{background:var(--panel);border:1px solid var(--border);padding:12px;border-radius:8px;overflow:auto;white-space:pre}
+.bubble code{font-family:ui-monospace,Menlo,monospace;font-size:13px}
+.empty{text-align:center;margin-top:18vh;color:var(--muted)}
+.empty h2{color:var(--text);font-weight:500}
+.chips{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:16px}
+.chips button{background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:20px;padding:8px 14px;font-size:14px}
+form{max-width:760px;width:100%;margin:0 auto;padding:12px 16px 20px;display:flex;gap:8px}
+textarea{flex:1;resize:none;max-height:180px;padding:12px;border-radius:14px;border:1px solid var(--border);background:var(--panel);color:var(--text);font:inherit;outline:none}
+#send{background:var(--accent);color:#fff;border:0;border-radius:12px;padding:0 18px}
+.dots span{animation:b 1s infinite;display:inline-block}.dots span:nth-child(2){animation-delay:.15s}.dots span:nth-child(3){animation-delay:.3s}
+@keyframes b{50%{opacity:.2}}
+@media(max-width:720px){aside{position:fixed;left:-270px;top:0;bottom:0;z-index:5;transition:left .2s}aside.open{left:0}#menu{display:block}}
+</style>
+</head>
+<body>
+<aside id="side">
+  <h1>✦ My AI</h1>
+  <button id="newChat">+ New chat</button>
+  <div id="history"></div>
+</aside>
+<main>
+  <header>
+    <button id="menu">☰</button>
+    <select id="persona">
+      <option value="You are a helpful, friendly all-round AI assistant. Be clear and concise.">All-rounder</option>
+      <option value="You are an expert programmer. Give working code with short explanations.">Coder</option>
+      <option value="You are a patient tutor for students in India (JEE, CUET, college). Explain step by step.">Study helper</option>
+      <option value="You are a startup mentor. Give practical, honest business advice.">Startup mentor</option>
+    </select>
+    <button id="clear">Clear all</button>
+  </header>
+  <div id="chat"></div>
+  <form id="form">
+    <textarea id="input" rows="1" placeholder="Message your AI..."></textarea>
+    <button id="send" type="submit">Send</button>
+  </form>
+</main>
+
+<script>
+/* ============ CONFIG ============
+   NEVER put your API key in this file. Create a small backend that
+   receives {messages, system} at API_URL, calls the AI provider with
+   your secret key, and returns {reply: "text"}.
+   Leave DEMO = true to test the interface without a backend. */
+const API_URL = "/api/chat";
+const DEMO = true;
+
+let chats = [];
+let current = null;
+try { chats = JSON.parse(localStorage.getItem("chats") || "[]"); } catch(e){}
+
+const $ = id => document.getElementById(id);
+const chatEl = $("chat"), input = $("input");
+
+function save(){ try{ localStorage.setItem("chats", JSON.stringify(chats)); }catch(e){} }
+function newChat(){ current = {id: Date.now(), title: "New chat", messages: []}; chats.unshift(current); render(); }
+function esc(s){ return s.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function fmt(t){
+  return esc(t).replace(/```(\w*)\n?([\s\S]*?)```/g, "<pre><code>$2</code></pre>")
+               .replace(/`([^`]+)`/g, "<code>$1</code>")
+               .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+}
+function renderHistory(){
+  $("history").innerHTML = "";
+  chats.forEach(c => {
+    const d = document.createElement("div");
+    d.className = "hist" + (c === current ? " active" : "");
+    d.textContent = c.title;
+    d.onclick = () => { current = c; render(); $("side").classList.remove("open"); };
+    $("history").appendChild(d);
+  });
+}
+function render(){
+  renderHistory();
+  chatEl.innerHTML = "";
+  if(!current.messages.length){
+    chatEl.innerHTML = '<div class="empty"><h2>How can I help you today?</h2><div class="chips">'
+      + ["Explain AI simply","Write HTML for a landing page","Startup ideas for India","Plan my study schedule"]
+        .map(s=>`<button onclick="quick(this.textContent)">${s}</button>`).join("") + '</div></div>';
+    return;
+  }
+  current.messages.forEach(m => addBubble(m.role, m.content));
+  chatEl.scrollTop = chatEl.scrollHeight;
+}
+function addBubble(role, text){
+  const r = document.createElement("div");
+  r.className = "row " + (role === "user" ? "user" : "bot");
+  const b = document.createElement("div");
+  b.className = "bubble";
+  b.innerHTML = fmt(text);
+  r.appendChild(b); chatEl.appendChild(r);
+  chatEl.scrollTop = chatEl.scrollHeight;
+  return b;
+}
+function quick(t){ input.value = t; $("form").requestSubmit(); }
+
+async function getReply(){
+  if(DEMO){
+    await new Promise(r => setTimeout(r, 700));
+    return "Demo mode is on. Your interface works!\n\nTo get real AI answers, set `DEMO = false` and connect a backend at `/api/chat`.";
+  }
+  const res = await fetch(API_URL, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ system: $("persona").value, messages: current.messages })
+  });
+  if(!res.ok) throw new Error("Server error " + res.status);
+  const data = await res.json();
+  return data.reply;
+}
+
+$("form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const text = input.value.trim();
+  if(!text) return;
+  input.value = ""; input.style.height = "auto";
+  if(!current.messages.length){ current.title = text.slice(0, 40); }
+  current.messages.push({role:"user", content:text});
+  render();
+  const b = addBubble("assistant", "");
+  b.innerHTML = '<span class="dots"><span>●</span><span>●</span><span>●</span></span>';
+  try{
+    const reply = await getReply();
+    current.messages.push({role:"assistant", content:reply});
+    b.innerHTML = fmt(reply);
+  }catch(err){
+    b.textContent = "Error: " + err.message;
+  }
+  save(); renderHistory(); chatEl.scrollTop = chatEl.scrollHeight;
+});
+input.addEventListener("keydown", e => { if(e.key === "Enter" && !e.shiftKey){ e.preventDefault(); $("form").requestSubmit(); }});
+input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = input.scrollHeight + "px"; });
+$("newChat").onclick = newChat;
+$("menu").onclick = () => $("side").classList.toggle("open");
+$("clear").onclick = () => { if(confirm("Delete all chats?")){ chats = []; save(); newChat(); } };
+chats.length ? (current = chats[0], render()) : newChat();
+</script>
+</body>
+</html>
